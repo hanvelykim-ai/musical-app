@@ -1,17 +1,23 @@
 const KV_REST_API_URL = process.env.KV_REST_API_URL;
 const KV_REST_API_TOKEN = process.env.KV_REST_API_TOKEN;
-const KEY = "musical-dirs-v2";
+const KEY = "musical-dirs-v3";
 
 async function kvGet() {
   const res = await fetch(`${KV_REST_API_URL}/get/${KEY}`, {
     headers: { Authorization: `Bearer ${KV_REST_API_TOKEN}` },
   });
   const json = await res.json();
-  return json.result ? JSON.parse(json.result) : {};
+  if (!json.result) return {};
+  // 중첩 파싱 방지: string이면 파싱, 아니면 그대로
+  let data = json.result;
+  while (typeof data === "string") {
+    try { data = JSON.parse(data); } catch { break; }
+  }
+  return data || {};
 }
 
 async function kvSet(value) {
-  await fetch(`${KV_REST_API_URL}/set/${KEY}`, {
+  const res = await fetch(`${KV_REST_API_URL}/set/${KEY}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${KV_REST_API_TOKEN}`,
@@ -19,6 +25,7 @@ async function kvSet(value) {
     },
     body: JSON.stringify({ value: JSON.stringify(value) }),
   });
+  return res.ok;
 }
 
 export default async function handler(req, res) {
