@@ -1,24 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { ACTORS, CAST, getActorScenes, sceneKey } from "./data";
 import ActorScreen from "./ActorScreen";
 import ResultScreen from "./ResultScreen";
 import "./App.css";
 
-const STORAGE_KEY = "musical-dirs-v2";
+const API = "/api/data";
 
-function loadSaved() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); } catch { return {}; }
-}
-
-// 배우별 완료율 계산
 function calcActorProgress(actor, dirsData) {
   const scenes = getActorScenes(actor);
   const dirs = dirsData || {};
   let done = 0;
   scenes.forEach((s, idx) => {
     const d = dirs[sceneKey(s)] || {};
-    const isFirst = idx === 0;
-    const isLast = idx === scenes.length - 1;
+    const isFirst = idx === 0, isLast = idx === scenes.length - 1;
     const needed = isFirst && isLast ? [d.exit]
       : isFirst ? [d.exit]
       : isLast ? [d.entry]
@@ -30,20 +24,38 @@ function calcActorProgress(actor, dirsData) {
 
 export default function App() {
   const [screen, setScreen] = useState("main");
-  const [savedData, setSavedData] = useState(loadSaved); // { [actor]: { [sceneKey]: {entry, exit} } }
+  const [savedData, setSavedData] = useState({});
   const [currentActor, setCurrentActor] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
+  // 앱 시작 시 KV에서 불러오기
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedData));
-  }, [savedData]);
+    fetch(API)
+      .then(r => r.json())
+      .then(data => { setSavedData(data || {}); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
 
-  // 전체 퍼센트: 10명 배우의 총 장면 중 완료된 장면 비율
+  // KV에 저장
+  const saveToKV = useCallback(async (data) => {
+    setSaving(true);
+    try {
+      await fetch(API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
   const totalProgress = (() => {
     let done = 0, total = 0;
     ACTORS.forEach(a => {
       const p = calcActorProgress(a, savedData[a]);
-      done += p.done;
-      total += p.total;
+      done += p.done; total += p.total;
     });
     return total === 0 ? 0 : Math.round((done / total) * 100);
   })();
@@ -53,21 +65,29 @@ export default function App() {
     return p.done === p.total;
   }).length;
 
-  function openActor(actor) {
-    setCurrentActor(actor);
-    setScreen("actor");
-  }
-
-  function saveActor(actor, dirs) {
-    setSavedData(prev => ({ ...prev, [actor]: dirs }));
+  async function saveActor(actor, dirs) {
+    const next = { ...savedData, [actor]: dirs };
+    setSavedData(next);
+    await saveToKV(next);
     setScreen("main");
   }
 
-  function resetAll() {
+  async function resetAll() {
     if (window.confirm("모든 데이터를 초기화할까요?")) {
       setSavedData({});
-      localStorage.removeItem(STORAGE_KEY);
+      await saveToKV({});
     }
+  }
+
+  if (loading) {
+    return (
+      <div className="app" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        <div style={{ textAlign: "center", color: "var(--text-secondary)" }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>I ❤</div>
+          <div style={{ fontSize: 14 }}>불러오는 중...</div>
+        </div>
+      </div>
+    );
   }
 
   if (screen === "actor") {
@@ -82,12 +102,7 @@ export default function App() {
   }
 
   if (screen === "result") {
-    return (
-      <ResultScreen
-        savedData={savedData}
-        onBack={() => setScreen("main")}
-      />
-    );
+    return <ResultScreen savedData={savedData} onBack={() => setScreen("main")} />;
   }
 
   return (
@@ -99,6 +114,7 @@ export default function App() {
             <p className="app-sub">배우별 상수/하수 입장·퇴장 방향 입력</p>
           </div>
           <div className="header-actions">
+            {saving && <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>저장 중...</span>}
             <button className="btn-ghost" onClick={resetAll}>초기화</button>
             <button className="btn-primary" onClick={() => setScreen("result")} disabled={fullyDoneActors === 0}>
               결과 보기
@@ -121,7 +137,7 @@ export default function App() {
           <div className="cast-label">CAST I</div>
           <div className="actor-grid">
             {["도연","세민","인성","우진","민규"].map(a => (
-              <ActorCard key={a} actor={a} dirsData={savedData[a]} onClick={() => openActor(a)} />
+              <ActorCard key={a} actor={a} dirsData={savedData[a]} onClick={() => { setCurrentActor(a); setScreen("actor"); }} />
             ))}
           </div>
         </div>
@@ -129,7 +145,7 @@ export default function App() {
           <div className="cast-label">CAST ❤</div>
           <div className="actor-grid">
             {["수연","한나","종대","효민","준태"].map(a => (
-              <ActorCard key={a} actor={a} dirsData={savedData[a]} onClick={() => openActor(a)} />
+              <ActorCard key={a} actor={a} dirsData={savedData[a]} onClick={() => { setCurrentActor(a); setScreen("actor"); }} />
             ))}
           </div>
         </div>
@@ -143,7 +159,6 @@ function ActorCard({ actor, dirsData, onClick }) {
   const pct = total === 0 ? 0 : Math.round((done / total) * 100);
   const allDone = done === total;
   const started = done > 0;
-
   return (
     <button className={`actor-card ${allDone ? "actor-card--done" : started ? "actor-card--partial" : ""}`} onClick={onClick}>
       <div className="actor-card-name">{actor}</div>
